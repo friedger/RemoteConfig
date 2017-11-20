@@ -5,6 +5,7 @@
 
     <!-- Remote config -->
     <string name="rc_config_location">https://raw.github.com/gangverk/Android-RemoteConfig/master/example/remote_rc.json</string>
-    <integer name="rc_config_update_interval">86400000</integer> <!-- Update interval in milliseconds -->
+    <integer name="rc_config_update_interval">86400000
+    </integer> <!-- Update interval in milliseconds -->
 
 </resources>
