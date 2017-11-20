@@ -1,4 +1,18 @@
-package is.gangverk.remoteconfig;
+package de.friedger.remoteconfig;
+
+import android.annotation.SuppressLint;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.content.SharedPreferences.Editor;
+import android.os.AsyncTask;
+import android.support.v4.content.LocalBroadcastManager;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -12,46 +26,29 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-
-import android.annotation.SuppressLint;
-import android.content.BroadcastReceiver;
-import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
-import android.content.SharedPreferences;
-import android.content.SharedPreferences.Editor;
-import android.os.AsyncTask;
-import android.support.v4.content.LocalBroadcastManager;
-
-import com.google.common.base.Strings;
-
 public class RemoteConfig {
     private static final String LAST_DOWNLOADED_CONFIG_KEY = "lastDownloadedConfig";
     // This is just a dot, since we have regular expression we have to have the backslashes as well
     private static final String DEEP_DICTIONARY_SEPARATOR_REGEX = "\\.";
-    private static final String DEEP_DICTIONARY_SEPARATOR = "";
+    private static final String DEEP_DICTIONARY_SEPARATOR = ".";
     private static final String REMOTE_CONFIG_FILE = "rc.json";
     private static final String SP_VERSION_KEY = "rc_version";
     private static final String LOCAL_BROADCAST_INTENT = "remote_config_download_complete";
     private static final String COMPLETE_CONFIG_KEY = "rc_complete_config";
+    private volatile static RemoteConfig instance;
     private URL mConfigLocation;
     private long mUpdateTime;
     private SharedPreferences mPreferences;
     private Context mContext;
     private ArrayList<RemoteConfigListener> mListeners;
     private int mVersion;
-
     private String mRemoteConfigFile = REMOTE_CONFIG_FILE;
 
-    public RemoteConfig() {}
-
-    private volatile static RemoteConfig instance;
+    public RemoteConfig() {
+    }
 
     /**
-     *  Returns singleton class instance
+     * Returns singleton class instance
      */
     public static RemoteConfig getInstance() {
         if (instance == null) {
@@ -64,10 +61,20 @@ public class RemoteConfig {
         return instance;
     }
 
-    public void setDefaults (String configFileUnderAssets) {
-        if (!Strings.isNullOrEmpty(configFileUnderAssets) ) {
+    @SuppressLint("NewApi")
+    private synchronized static boolean shouldUpdate(SharedPreferences preferences, long updateTime) {
+        long lastDownloadedConfig = preferences.getLong(RemoteConfig.LAST_DOWNLOADED_CONFIG_KEY, 0);
+        return (lastDownloadedConfig + updateTime < System.currentTimeMillis());
+    }
+
+    public void setDefaults(String configFileUnderAssets) {
+        if (!isNullOrEmpty(configFileUnderAssets)) {
             mRemoteConfigFile = configFileUnderAssets;
         }
+    }
+
+    private boolean isNullOrEmpty(String string) {
+        return string == null || string.length() == 0;
     }
 
     /**
@@ -84,10 +91,10 @@ public class RemoteConfig {
     /**
      * Use this method to initialize the remote config with a custom config location.
      *
-     * @param context Can be application context
-     * @param version For version control. If this isn't increased with new key/value pairs won't ever be added
+     * @param context    Can be application context
+     * @param version    For version control. If this isn't increased with new key/value pairs won't ever be added
      * @param useDefault If true then use the assets/rc.json file as default values
-     * @param location The location of the remote config
+     * @param location   The location of the remote config
      */
     @SuppressLint({"CommitPrefEdits"})
     public synchronized void init(Context context, int version, boolean useDefault, String location) {
@@ -96,9 +103,9 @@ public class RemoteConfig {
         setConfigImpl(location);
         mUpdateTime = context.getResources().getInteger(context.getResources().getIdentifier("rc_config_update_interval", "integer", context.getPackageName()));
         int oldVersion = mPreferences.getInt(SP_VERSION_KEY, -1);
-        if(version>oldVersion) {
+        if (version > oldVersion) {
             mPreferences.edit().clear().apply();
-            if(useDefault) {
+            if (useDefault) {
                 initializeConfigFile();
             }
         }
@@ -109,10 +116,10 @@ public class RemoteConfig {
     private void initializeConfigFile() {
         // Start with parsing the assets/rc.json file into JSONObject
         JSONObject remoteConfig = initialFileToJsonObject();
-        if(remoteConfig!=null) {
+        if (remoteConfig != null) {
             jsonObjectIntoPreferences(remoteConfig);
         } else {
-            throw new RuntimeException("Unable to read rc.json file. Are you sure it exists in the assets folder?");
+            throw new RuntimeException(String.format("Unable to read %s file. Are you sure it exists in the assets folder?", mRemoteConfigFile));
         }
     }
 
@@ -131,23 +138,11 @@ public class RemoteConfig {
         }
     }
 
-    public void setConfig(String location) {
-        setConfigImpl(location);
-        boolean updateNeeded = checkForUpdate();
-        if(!updateNeeded) {
-            if(mListeners!=null && mListeners.size()>0) {
-                for(RemoteConfigListener listener : mListeners) {
-                    listener.onConfigComplete();
-                }
-            }
-        }
-    }
-
     public JSONObject getConfig() {
         String completeConfig = getString(COMPLETE_CONFIG_KEY);
         JSONObject completeJSON = null;
         try {
-            if(completeConfig==null) {
+            if (completeConfig == null) {
                 return null;
             }
             completeJSON = new JSONObject(completeConfig);
@@ -157,6 +152,18 @@ public class RemoteConfig {
         return completeJSON;
     }
 
+    public void setConfig(String location) {
+        setConfigImpl(location);
+        boolean updateNeeded = checkForUpdate();
+        if (!updateNeeded) {
+            if (mListeners != null && mListeners.size() > 0) {
+                for (RemoteConfigListener listener : mListeners) {
+                    listener.onConfigComplete();
+                }
+            }
+        }
+    }
+
     @SuppressLint("CommitPrefEdits")
     private synchronized void jsonObjectIntoPreferences(final JSONObject jsonObject) {
         Editor editor = mPreferences.edit();
@@ -164,7 +171,7 @@ public class RemoteConfig {
         editor.putString(COMPLETE_CONFIG_KEY, jsonObject.toString());
         HashMap<String, Object> changedKeys = new HashMap<String, Object>();
         ArrayList<String> allKeys = getAllKeysFromJSONObject(jsonObject, null);
-        for(String newKey : allKeys) {
+        for (String newKey : allKeys) {
 
             // If the key is inside an inner JSON dictionary it is defined with
             // a dot like dictionary1.dictionary2. That's why we split the string
@@ -173,8 +180,8 @@ public class RemoteConfig {
 
             JSONObject deepDictionary = jsonObject;
 
-            for(int i=0;i<deepKeys.length-1;i++) {
-                if(deepDictionary.has(deepKeys[i])) {
+            for (int i = 0; i < deepKeys.length - 1; i++) {
+                if (deepDictionary.has(deepKeys[i])) {
                     try {
                         deepDictionary = deepDictionary.getJSONObject(deepKeys[i]);
                     } catch (JSONException e) {
@@ -182,30 +189,30 @@ public class RemoteConfig {
                     }
                 }
             }
-            String key = deepKeys[deepKeys.length-1];
+            String key = deepKeys[deepKeys.length - 1];
 
             try {
                 Object value = deepDictionary.get(key);
-                if(value instanceof JSONArray) {
+                if (value instanceof JSONArray) {
                     String oldValue = mPreferences.getString(newKey, null);
-                    String newValue = ((JSONArray)value).toString();
-                    if(!newValue.equals(oldValue)){
-                        editor.putString(newKey,newValue);
+                    String newValue = ((JSONArray) value).toString();
+                    if (!newValue.equals(oldValue)) {
+                        editor.putString(newKey, newValue);
                         changedKeys.put(newKey, newValue);
                     }
-                } else if(value instanceof String) {
+                } else if (value instanceof String) {
                     String oldValue = mPreferences.getString(newKey, null);
-                    String newValue = (String)value;
-                    if(!newValue.equals(oldValue)){
-                        editor.putString(newKey,newValue);
+                    String newValue = (String) value;
+                    if (!newValue.equals(oldValue)) {
+                        editor.putString(newKey, newValue);
                         changedKeys.put(newKey, newValue);
                     }
 
-                } else if(value instanceof Integer) {
+                } else if (value instanceof Integer) {
                     int oldValue = mPreferences.getInt(newKey, -1);
-                    int newValue = ((Integer)value).intValue();
-                    if(newValue != oldValue){
-                        editor.putInt(newKey,newValue);
+                    int newValue = (Integer) value;
+                    if (newValue != oldValue) {
+                        editor.putInt(newKey, newValue);
                         changedKeys.put(newKey, newValue);
                     }
                 }
@@ -216,8 +223,8 @@ public class RemoteConfig {
         editor.apply();
         //Let someone know we have a new value
         Iterator<String> it = changedKeys.keySet().iterator();
-        if(mListeners!=null && mListeners.size()>0) {
-            for(RemoteConfigListener listener : mListeners) {
+        if (mListeners != null && mListeners.size() > 0) {
+            for (RemoteConfigListener listener : mListeners) {
                 while (it.hasNext()) {
                     String key = it.next();
                     listener.onValueUpdated(key, changedKeys.get(key));
@@ -245,8 +252,9 @@ public class RemoteConfig {
             }
             String jsonString = total.toString();
             remoteConfig = new JSONObject(jsonString);
-        } catch (Exception e) {} finally {
-            if(is!=null) {
+        } catch (Exception e) {
+        } finally {
+            if (is != null) {
                 try {
                     is.close();
                 } catch (IOException e) {
@@ -261,14 +269,13 @@ public class RemoteConfig {
      * Checks if it is time for update based on the updateTime variable.
      */
     public boolean checkForUpdate() {
-        if(RemoteConfig.shouldUpdate(mPreferences, mUpdateTime)) {
+        if (RemoteConfig.shouldUpdate(mPreferences, mUpdateTime)) {
             // Fetch the config
             new FetchConfigAsyncTask().execute();
             return true;
         }
         return false;
     }
-
 
     /**
      * Takes in the map parameter and returns the mapping if available. If the mapping is not available it
@@ -288,17 +295,58 @@ public class RemoteConfig {
         return mPreferences.getInt(mapping, -1);
     }
 
-    @SuppressLint("NewApi")
-    private synchronized static boolean shouldUpdate(SharedPreferences preferences, long updateTime) {
-        long lastDownloadedConfig = preferences.getLong(RemoteConfig.LAST_DOWNLOADED_CONFIG_KEY, 0);
-        return (lastDownloadedConfig + updateTime < System.currentTimeMillis());
+    private ArrayList<String> getAllKeysFromJSONObject(JSONObject jsonObject, String prefix) {
+        ArrayList<String> allKeys = new ArrayList<String>();
+        Iterator<?> iter = jsonObject.keys();
+        while (iter.hasNext()) {
+            try {
+                String key = (String) iter.next();
+                Object value = jsonObject.get(key);
+                String newKey = null;
+                if (prefix != null) {
+                    newKey = prefix + DEEP_DICTIONARY_SEPARATOR + key;
+                } else {
+                    newKey = key;
+                }
+                if (value instanceof JSONObject) {
+                    allKeys.addAll(getAllKeysFromJSONObject(((JSONObject) jsonObject.get(key)), newKey));
+                } else {
+                    allKeys.add(newKey);
+                }
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
+        }
+        return allKeys;
+    }
+
+    /**
+     * Adds a listener to the remote config that can react to new values being downloaded
+     *
+     * @param listener The listener to listen for new config values
+     */
+    public void addRemoteConfigListener(RemoteConfigListener listener) {
+        if (mListeners == null)
+            mListeners = new ArrayList<RemoteConfig.RemoteConfigListener>();
+        mListeners.add(listener);
+    }
+
+    /**
+     * Removes a listener
+     *
+     * @param listener The listener to remove
+     */
+    public void removeRemoteConfigListener(RemoteConfigListener listener) {
+        if (mListeners != null) {
+            mListeners.remove(listener);
+        }
     }
 
     public interface RemoteConfigListener {
         /**
          * This method is called when the config has been downloaded and it's values are being put into shared preferences
          *
-         * @param key The key for the new value in shared preferences
+         * @param key   The key for the new value in shared preferences
          * @param value The updated value
          */
         public void onValueUpdated(String key, Object value);
@@ -316,60 +364,13 @@ public class RemoteConfig {
         public void onConfigError(String string);
     }
 
-    private ArrayList<String> getAllKeysFromJSONObject(JSONObject jsonObject, String prefix) {
-        ArrayList<String> allKeys = new ArrayList<String>();
-        Iterator<?> iter = jsonObject.keys();
-        while (iter.hasNext()) {
-            try {
-                String key = (String)iter.next();
-                Object value = jsonObject.get(key);
-                String newKey = null;
-                if(prefix!=null) {
-                    newKey = prefix + DEEP_DICTIONARY_SEPARATOR + key;
-                } else {
-                    newKey = key;
-                }
-                if(value instanceof JSONObject) {
-                    allKeys.addAll(getAllKeysFromJSONObject(((JSONObject)jsonObject.get(key)), newKey));
-                } else {
-                    allKeys.add(newKey);
-                }
-            } catch (JSONException e) {
-                e.printStackTrace();
-            }
-        }
-        return allKeys;
-    }
-
-    /**
-     * Adds a listener to the remote config that can react to new values being downloaded
-     *
-     * @param listener The listener to listen for new config values
-     */
-    public void addRemoteConfigListener(RemoteConfigListener listener) {
-        if(mListeners==null)
-            mListeners = new ArrayList<RemoteConfig.RemoteConfigListener>();
-        mListeners.add(listener);
-    }
-
-    /**
-     * Removes a listener
-     *
-     * @param listener The listener to remove
-     */
-    public void removeRemoteConfigListener(RemoteConfigListener listener) {
-        if(mListeners!=null) {
-            mListeners.remove(listener);
-        }
-    }
-
     private class FetchConfigAsyncTask extends AsyncTask<Void, Void, JSONObject> {
 
         @Override
         protected JSONObject doInBackground(Void... params) {
             try {
                 String jsonString = Downloader.readJSONFeedString(mConfigLocation.toString());
-                if(jsonString==null) return null;
+                if (jsonString == null) return null;
                 return new JSONObject(jsonString);
             } catch (JSONException e) {
                 e.printStackTrace();
@@ -379,13 +380,13 @@ public class RemoteConfig {
 
         @Override
         protected void onPostExecute(JSONObject config) {
-            if(config!=null) {
+            if (config != null) {
                 Editor editor = mPreferences.edit();
                 editor.putLong(RemoteConfig.LAST_DOWNLOADED_CONFIG_KEY, System.currentTimeMillis());
                 editor.apply();
                 jsonObjectIntoPreferences(config);
             } else {
-                if(mListeners!=null) {
+                if (mListeners != null) {
                     for (int i = 0; i < mListeners.size(); i++) {
                         mListeners.get(i).onConfigError("Unable to read remote config");
                     }
